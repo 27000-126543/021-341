@@ -32,6 +32,17 @@ class FeedbackEntry:
     remark: str = ""
     responder: str = ""
     feedback_date: str = ""
+    review_date: str = ""
+    handler: str = ""
+    attachment: str = ""
+
+
+def _find_col(fields, candidates):
+    fields_lower = {c.strip().lower(): c for c in fields}
+    for c in candidates:
+        if c.strip().lower() in fields_lower:
+            return fields_lower[c.strip().lower()]
+    return None
 
 
 def read_feedback_csv(file_path: str) -> Tuple[List[FeedbackEntry], List[str]]:
@@ -47,35 +58,37 @@ def read_feedback_csv(file_path: str) -> Tuple[List[FeedbackEntry], List[str]]:
             errors.append(f"反馈文件为空: {file_path}")
             return entries, errors
 
-        id_cols = ["问题编号", "issue_id", "编号", "ID"]
-        status_cols = ["整改状态", "状态", "反馈状态", "status"]
-        remark_cols = ["整改说明", "备注", "说明", "remark"]
-        responder_cols = ["整改人", "反馈人", "负责人", "responder"]
-        date_cols = ["整改日期", "反馈日期", "日期", "date"]
+        cols = {
+            "id": ["问题编号", "issue_id", "编号", "ID"],
+            "status": ["整改状态", "状态", "反馈状态", "status"],
+            "remark": ["整改说明", "备注", "说明", "remark", "反馈说明"],
+            "responder": ["整改人", "反馈人", "负责人", "responder"],
+            "feedback_date": ["整改日期", "反馈日期", "日期", "date"],
+            "review_date": ["复核日期", "复验日期", "review_date", "reviewDate"],
+            "handler": ["处理责任人", "责任人", "处理人", "handler"],
+            "attachment": ["附件路径", "附件", "凭证", "attachment"],
+        }
 
-        def _find_col(fields, candidates):
-            fields_lower = {c.strip().lower(): c for c in fields}
-            for c in candidates:
-                if c.strip().lower() in fields_lower:
-                    return fields_lower[c.strip().lower()]
-            return None
+        found = {}
+        for key, candidates in cols.items():
+            found[key] = _find_col(reader.fieldnames, candidates)
 
-        id_col = _find_col(reader.fieldnames, id_cols)
-        status_col = _find_col(reader.fieldnames, status_cols)
-        remark_col = _find_col(reader.fieldnames, remark_cols)
-        responder_col = _find_col(reader.fieldnames, responder_cols)
-        date_col = _find_col(reader.fieldnames, date_cols)
-
-        if not id_col:
-            errors.append(f"反馈文件缺少问题编号列（期望: {', '.join(id_cols)}）")
+        if not found["id"]:
+            errors.append(f"反馈文件缺少问题编号列（期望: {', '.join(cols['id'])}）")
             return entries, errors
-        if not status_col:
-            errors.append(f"反馈文件缺少整改状态列（期望: {', '.join(status_cols)}）")
+        if not found["status"]:
+            errors.append(f"反馈文件缺少整改状态列（期望: {', '.join(cols['status'])}）")
             return entries, errors
 
         for i, row in enumerate(reader, start=2):
-            raw_id = str(row.get(id_col, "")).strip()
-            raw_status = str(row.get(status_col, "")).strip()
+            def gv(key):
+                col = found.get(key)
+                if not col:
+                    return ""
+                return str(row.get(col, "")).strip()
+
+            raw_id = gv("id")
+            raw_status = gv("status")
             if not raw_id or not raw_status:
                 continue
             normalized = FEEDBACK_STATUS_MAP.get(raw_status, raw_status)
@@ -85,9 +98,12 @@ def read_feedback_csv(file_path: str) -> Tuple[List[FeedbackEntry], List[str]]:
             entry = FeedbackEntry(
                 issue_id=raw_id,
                 status=normalized,
-                remark=str(row.get(remark_col, "")).strip() if remark_col else "",
-                responder=str(row.get(responder_col, "")).strip() if responder_col else "",
-                feedback_date=str(row.get(date_col, "")).strip() if date_col else "",
+                remark=gv("remark"),
+                responder=gv("responder"),
+                feedback_date=gv("feedback_date"),
+                review_date=gv("review_date"),
+                handler=gv("handler"),
+                attachment=gv("attachment"),
             )
             entries.append(entry)
 
@@ -112,43 +128,35 @@ def read_feedback_excel(file_path: str) -> Tuple[List[FeedbackEntry], List[str]]
         for cell in ws[1]:
             header.append(str(cell.value).strip() if cell.value is not None else "")
 
-        id_cols = ["问题编号", "issue_id", "编号", "ID"]
-        status_cols = ["整改状态", "状态", "反馈状态", "status"]
-        remark_cols = ["整改说明", "备注", "说明", "remark"]
-        responder_cols = ["整改人", "反馈人", "负责人", "responder"]
-        date_cols = ["整改日期", "反馈日期", "日期", "date"]
+        cols = {
+            "id": ["问题编号", "issue_id", "编号", "ID"],
+            "status": ["整改状态", "状态", "反馈状态", "status"],
+            "remark": ["整改说明", "备注", "说明", "remark", "反馈说明"],
+            "responder": ["整改人", "反馈人", "负责人", "responder"],
+            "feedback_date": ["整改日期", "反馈日期", "日期", "date"],
+            "review_date": ["复核日期", "复验日期", "review_date", "reviewDate"],
+            "handler": ["处理责任人", "责任人", "处理人", "handler"],
+            "attachment": ["附件路径", "附件", "凭证", "attachment"],
+        }
 
-        def _find_col(fields, candidates):
-            fields_lower = {c.strip().lower(): c for c in fields}
-            for c in candidates:
-                if c.strip().lower() in fields_lower:
-                    return fields_lower[c.strip().lower()]
-            return None
+        found_idx = {}
+        for key, candidates in cols.items():
+            col = _find_col(header, candidates)
+            found_idx[key] = header.index(col) if col else -1
 
-        id_col = _find_col(header, id_cols)
-        status_col = _find_col(header, status_cols)
-        remark_col = _find_col(header, remark_cols)
-        responder_col = _find_col(header, responder_cols)
-        date_col = _find_col(header, date_cols)
-
-        if not id_col or not status_col:
+        if found_idx["id"] < 0 or found_idx["status"] < 0:
             continue
 
-        id_idx = header.index(id_col)
-        status_idx = header.index(status_col)
-        remark_idx = header.index(remark_col) if remark_col else -1
-        responder_idx = header.index(responder_col) if responder_col else -1
-        date_idx = header.index(date_col) if date_col else -1
-
         for row_idx in range(2, ws.max_row + 1):
-            def cell_val(idx):
+            def gv(key):
+                idx = found_idx.get(key, -1)
                 if idx < 0:
                     return ""
                 c = ws.cell(row=row_idx, column=idx + 1)
                 return str(c.value).strip() if c.value is not None else ""
 
-            raw_id = cell_val(id_idx)
-            raw_status = cell_val(status_idx)
+            raw_id = gv("id")
+            raw_status = gv("status")
             if not raw_id or not raw_status:
                 continue
             normalized = FEEDBACK_STATUS_MAP.get(raw_status, raw_status)
@@ -158,9 +166,12 @@ def read_feedback_excel(file_path: str) -> Tuple[List[FeedbackEntry], List[str]]
             entries.append(FeedbackEntry(
                 issue_id=raw_id,
                 status=normalized,
-                remark=cell_val(remark_idx),
-                responder=cell_val(responder_idx),
-                feedback_date=cell_val(date_idx),
+                remark=gv("remark"),
+                responder=gv("responder"),
+                feedback_date=gv("feedback_date"),
+                review_date=gv("review_date"),
+                handler=gv("handler"),
+                attachment=gv("attachment"),
             ))
     wb.close()
     return entries, errors
@@ -187,6 +198,7 @@ def merge_feedback(issues: List[Issue], feedback_entries: List[FeedbackEntry]) -
             "issue_id": issue.issue_id,
             "severity": issue.severity,
             "issue_type": issue.type_label,
+            "issue_type_key": issue.issue_type,
             "file_name": issue.file_name,
             "pile_no": issue.pile_no,
             "row_index": issue.row_index,
@@ -197,6 +209,9 @@ def merge_feedback(issues: List[Issue], feedback_entries: List[FeedbackEntry]) -
             "remark": fb.remark if fb else "",
             "responder": fb.responder if fb else "",
             "feedback_date": fb.feedback_date if fb else "",
+            "review_date": fb.review_date if fb else "",
+            "handler": fb.handler if fb else "",
+            "attachment": fb.attachment if fb else "",
         }
         results.append(result)
     return results
@@ -239,10 +254,23 @@ def generate_feedback_report_text(project_name: str, check_date: str,
         lines.append(f"  ━━━ {icon} {group_status} ━━━")
         lines.append("-" * 78)
         for item in group_items:
-            lines.append(f"  [{item['issue_id']}] {item['issue_type']} | {item['file_name']} 第{item['row_index']}行 | 桩号: {item['pile_no']}")
+            sev_icon = {"严重": "🔴", "警告": "🟡", "提示": "🔵"}.get(item["severity"], "")
+            lines.append(
+                f"  [{item['issue_id']}] [{item['severity']}] {item['issue_type']} | "
+                f"{item['file_name']} 第{item['row_index']}行 | 桩号: {item['pile_no']}"
+            )
             lines.append(f"    原因: {item['reason']}")
             if item["remark"]:
-                lines.append(f"    反馈: {item['remark']}（{item['responder']}）")
+                handler_str = f"（{item['handler']}）" if item["handler"] else (
+                    f"（{item['responder']}）" if item["responder"] else ""
+                )
+                lines.append(f"    反馈: {item['remark']}{handler_str}")
+            if item["review_date"]:
+                lines.append(f"    复核日期: {item['review_date']}")
+            if item["feedback_date"]:
+                lines.append(f"    反馈日期: {item['feedback_date']}")
+            if item["attachment"]:
+                lines.append(f"    附件: {item['attachment']}")
             lines.append("")
 
     lines.append("=" * 78)
@@ -293,6 +321,11 @@ def generate_feedback_excel(merged: List[Dict], out_path: str,
         "仍异常": PatternFill(start_color="F8CBAD", end_color="F8CBAD", fill_type="solid"),
         "未反馈": PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"),
     }
+    sev_color = {
+        "严重": PatternFill(start_color="F8CBAD", end_color="F8CBAD", fill_type="solid"),
+        "警告": PatternFill(start_color="FFE699", end_color="FFE699", fill_type="solid"),
+        "提示": PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"),
+    }
     for status, count in summary.items():
         ws_summary.append([status, count])
         for cell in ws_summary[ws_summary.max_row]:
@@ -309,7 +342,7 @@ def generate_feedback_excel(merged: List[Dict], out_path: str,
     headers = [
         "问题编号", "整改状态", "严重程度", "问题类型", "文件名",
         "桩号", "行号", "疑似原因", "建议复核项", "详细信息",
-        "整改说明", "整改人", "整改日期"
+        "整改说明", "整改人", "整改日期", "复核日期", "处理责任人", "附件路径"
     ]
     ws_detail.append(headers)
     for cell in ws_detail[1]:
@@ -333,19 +366,25 @@ def generate_feedback_excel(merged: List[Dict], out_path: str,
             item["remark"],
             item["responder"],
             item["feedback_date"],
+            item["review_date"],
+            item["handler"],
+            item["attachment"],
         ]
         ws_detail.append(row)
-        color = status_colors.get(item["status"])
+        st_color = status_colors.get(item["status"])
+        sv_color = sev_color.get(item["severity"])
         for col_idx, cell in enumerate(ws_detail[ws_detail.max_row], 1):
             cell.border = border
-            if col_idx == 2 and color:
-                cell.fill = color
+            if col_idx == 2 and st_color:
+                cell.fill = st_color
+            if col_idx == 3 and sv_color:
+                cell.fill = sv_color
             if col_idx in (1, 2, 3, 4, 6, 7):
                 cell.alignment = center
             else:
                 cell.alignment = left
 
-    widths = [12, 10, 10, 18, 28, 12, 8, 50, 40, 30, 30, 12, 14]
+    widths = [14, 10, 10, 18, 28, 12, 8, 50, 40, 30, 30, 12, 14, 14, 14, 30]
     for idx, w in enumerate(widths, 1):
         ws_detail.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = w
     ws_detail.freeze_panes = "A2"
@@ -376,3 +415,19 @@ def save_feedback_reports(project_name: str, check_date: str, output_dir: str,
             print(f"  ⚠ 生成 Excel 整改报告失败: {e}")
 
     return results
+
+
+def generate_feedback_template_csv(project_name: str = "", check_date: str = "") -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "问题编号", "整改状态", "严重程度", "问题类型", "文件名",
+        "桩号", "行号", "疑似原因", "建议复核项",
+        "整改说明", "整改人", "整改日期", "复核日期", "处理责任人", "附件路径"
+    ])
+    writer.writerow([
+        "示例：PIL-XXXXXXXX", "已整改/待复核/仍异常", "", "", "",
+        "", "", "", "",
+        "填写整改说明", "施工员姓名", "YYYY-MM-DD", "YYYY-MM-DD", "责任人姓名", "照片或文档路径"
+    ])
+    return output.getvalue()

@@ -36,6 +36,21 @@ class PileRecord:
                 return datetime(t.year, t.month, t.day)
         return None
 
+    def record_dates(self) -> List[datetime]:
+        days = []
+        for t in (self.hole_finish_time, self.pouring_start_time):
+            if t is not None:
+                days.append(datetime(t.year, t.month, t.day))
+        return days
+
+    def matches_date(self, target: datetime) -> bool:
+        target_day = datetime(target.year, target.month, target.day)
+        for t in (self.hole_finish_time, self.pouring_start_time):
+            if t is not None:
+                if datetime(t.year, t.month, t.day) == target_day:
+                    return True
+        return False
+
     def has_any_data(self) -> bool:
         return bool(
             self.pile_no
@@ -225,12 +240,10 @@ def filter_records_by_date(records: List[PileRecord], date_filter: DateFilter,
     target = date_filter.parse_target()
     if target is None:
         return records, 0
-    target_day = datetime(target.year, target.month, target.day)
 
     included = []
     for rec in records:
-        rec_day = rec.record_date()
-        if rec_day is not None and datetime(rec_day.year, rec_day.month, rec_day.day) == target_day:
+        if rec.matches_date(target):
             included.append(rec)
 
     filtered_count = len(records) - len(included)

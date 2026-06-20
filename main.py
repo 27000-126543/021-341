@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-桩基施工记录批量校核工具 v3.0
-用法:
-  python main.py check <项目名称> <检查日期> [选项]
-  python main.py feedback <项目名称> <检查日期> --feedback <反馈文件> [选项]
+桩基施工记录批量校核工具 v4.0
+子命令:
+  check    - 批量校核桩基记录
+  feedback - 导入施工员反馈表，生成整改跟踪闭环汇总
+  export   - 一键打包交接资料（报告 + 配置快照 + 反馈模板 + 文件清单）
+  history  - 多日复查视图：查看问题新增/持续/消失，生成日报汇总
 """
 
 import sys
 import os
 import argparse
+import csv as csv_mod
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,11 +22,16 @@ from pile_checker.config import (
     load_project_config, save_project_config,
 )
 from pile_checker.reader import read_all_records
-from pile_checker.checker import run_all_checks
+from pile_checker.checker import run_all_checks, Issue, ISSUE_TYPES
+from pile_checker.config import ISSUE_SEVERITY
 from pile_checker.report import save_reports, print_console_summary
 from pile_checker.feedback import (
     read_feedback, merge_feedback, status_summary,
     save_feedback_reports,
+)
+from pile_checker.export import build_handover_package
+from pile_checker.history import (
+    build_history, find_persistent_issues, save_history_reports,
 )
 
 
@@ -82,6 +90,10 @@ def _add_check_args(parser):
                         help="保存当前参数为项目配置文件")
     parser.add_argument("--no-xlsx", action="store_true",
                         help="不生成 Excel 格式报告")
+    parser.add_argument("--no-export", action="store_true",
+                        help="不自动打包交接资料（默认 check 完成后自动打包）")
+    parser.add_argument("--no-zip", action="store_true",
+                        help="交接包不生成 ZIP 压缩包")
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="安静模式")
 
@@ -91,13 +103,37 @@ def _add_feedback_args(parser):
                         help="施工员反馈表文件路径（CSV 或 Excel）")
     parser.add_argument("--no-xlsx", action="store_true",
                         help="不生成 Excel 格式整改报告")
+    parser.add_argument("--no-export", action="store_true",
+                        help="不自动打包交接资料")
+    parser.add_argument("--no-zip", action="store_true",
+                        help="交接包不生成 ZIP 压缩包")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="安静模式")
+
+
+def _add_history_args(parser):
+    parser.add_argument("--from", dest="from_date", default=None,
+                        help="起始日期 YYYY-MM-DD")
+    parser.add_argument("--to", dest="to_date", default=None,
+                        help="结束日期 YYYY-MM-DD")
+    parser.add_argument("--persistent-days", type=int, default=2,
+                        help="连续多少天未关闭算为持续问题，默认 2 天")
+    parser.add_argument("--no-xlsx", action="store_true",
+                        help="不生成 Excel 格式报告")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="安静模式")
+
+
+def _add_export_args(parser):
+    parser.add_argument("--no-zip", action="store_true",
+                        help="不生成 ZIP 压缩包")
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="安静模式")
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="桩基施工记录批量校核工具 v3.0",
+        description="桩基施工记录批量校核工具 v4.0",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command")
@@ -110,7 +146,7 @@ def build_parser():
   python main.py check 滨江一号 2026-06-21 --filter-date
   python main.py check -c projects/滨江一号.json 2026-06-21 --filter-date
   python main.py check 科技园 2026-06-21 --volume-tol 0.08 --pile-prefix ZK
-  python main.py check 滨江一号 --save-config projects/滨江一号.json --pile-prefix ZK --pile-count 120
+  python main.py check 滨江一号 --save-config projects/滨江一号.json --pile-prefix ZK
                              """)
     _add_common_args(p_check)
     _add_check_args(p_check)
@@ -125,10 +161,30 @@ def build_parser():
     _add_common_args(p_feedback)
     _add_feedback_args(p_feedback)
 
-    p_legacy = sub.add_parser("run", help="[兼容] 等同于 check",
-                              formatter_class=argparse.RawDescriptionHelpFormatter)
-    _add_common_args(p_legacy)
-    _add_check_args(p_legacy)
+    p_history = sub.add_parser("history", help="多日复查视图",
+                               formatter_class=argparse.RawDescriptionHelpFormatter,
+                               epilog="""
+示例:
+  python main.py history 滨江一号 --from 2026-06-15 --to 2026-06-21
+  python main.py history -c projects/滨江一号.json --from 2026-06-01 --persistent-days 3
+                               """)
+    _add_common_args(p_history)
+    _add_history_args(p_history)
+
+    p_export = sub.add_parser("export", help="一键打包交接资料",
+                             formatter_class=argparse.RawDescriptionHelpFormatter,
+                             epilog="""
+示例:
+  python main.py export 滨江一号 2026-06-21
+  python main.py export -c projects/滨江一号.json 2026-06-21
+                             """)
+    _add_common_args(p_export)
+    _add_export_args(p_export)
+
+    p_run = sub.add_parser("run", help="[兼容] 等同于 check",
+                           formatter_class=argparse.RawDescriptionHelpFormatter)
+    _add_common_args(p_run)
+    _add_check_args(p_run)
 
     return parser
 
@@ -206,6 +262,33 @@ def _load_config(args):
     return app_config, check_date
 
 
+def _load_issues_from_report_csv(csv_path: str) -> list:
+    issues = []
+    if not os.path.isfile(csv_path):
+        return issues
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv_mod.DictReader(f)
+        if not reader.fieldnames:
+            return issues
+
+        type_reverse = {v: k for k, v in ISSUE_TYPES.items()}
+        for row in reader:
+            itype_label = str(row.get("问题类型", "")).strip()
+            itype_key = type_reverse.get(itype_label, itype_label) or "field_missing"
+            issue = Issue(
+                issue_type=itype_key,
+                file_name=str(row.get("文件名", "")).strip(),
+                pile_no=str(row.get("桩号", "")).strip(),
+                reason=str(row.get("疑似原因", "")).strip(),
+                suggestion=str(row.get("建议复核项", "")).strip(),
+                detail=str(row.get("详细信息", "")).strip(),
+                row_index=int(row.get("行号", 0) or 0),
+                issue_id=str(row.get("问题编号", "")).strip(),
+            )
+            issues.append(issue)
+    return issues
+
+
 def cmd_check(args):
     app_config, check_date = _load_config(args)
 
@@ -224,7 +307,7 @@ def cmd_check(args):
     if not args.quiet:
         print()
         print("╔══════════════════════════════════════════════════════════╗")
-        print("║       桩基施工记录批量校核工具  v3.0                    ║")
+        print("║       桩基施工记录批量校核工具  v4.0                    ║")
         print("╚══════════════════════════════════════════════════════════╝")
         print()
         print(f"  项目名称: {app_config.project_name}")
@@ -232,7 +315,7 @@ def cmd_check(args):
         print(f"  记录目录: {os.path.abspath(app_config.input_dir)}")
         print(f"  报告目录: {os.path.abspath(app_config.output_dir)}")
         if app_config.date_filter.enabled:
-            print(f"  日期筛选: 已启用（按记录行内成孔/灌注日期逐行筛选 {check_date}）")
+            print(f"  日期筛选: 已启用（成孔或灌注任一命中 {check_date} 即纳入）")
         else:
             print(f"  日期筛选: 已关闭（检查全部文件）")
         print()
@@ -266,7 +349,10 @@ def cmd_check(args):
     if not args.quiet:
         scanned = len(file_metas)
         excluded = scanned - total_files
+        total_filtered = sum(m.rows_filtered_by_date for m in file_metas)
         print(f"  ✓ 扫描 {scanned} 份文件，纳入 {total_files} 份，排除 {excluded} 份，共 {total_records} 条有效记录")
+        if total_filtered > 0:
+            print(f"  ※ 日期筛选共排除非当天记录 {total_filtered} 条")
         if errors:
             print(f"  ⚠ 读取过程中有 {len(errors)} 个错误")
         print()
@@ -292,11 +378,48 @@ def cmd_check(args):
         for fmt, fpath in report_files.items():
             label = {"txt": "TXT 文本报告", "csv": "CSV 明细表", "xlsx": "Excel 工作簿"}.get(fmt, fmt.upper())
             print(f"    [{fmt.upper()}] {label} → {fpath}")
-    print()
+        print()
+
+    if not getattr(args, "no_export", False) and report_files:
+        print("  正在打包交接资料...")
+        try:
+            handover = build_handover_package(
+                project_name=app_config.project_name,
+                check_date=check_date,
+                output_dir=os.path.abspath(app_config.output_dir),
+                app_config=app_config,
+                report_files=report_files,
+                file_metas=file_metas,
+                include_zip=not getattr(args, "no_zip", False),
+            )
+            print("  交接资料:")
+            for key, fpath in handover.items():
+                if key == "zip":
+                    print(f"    [ZIP] 压缩包 → {fpath}")
+                elif key.startswith("report_"):
+                    continue
+                else:
+                    label = {
+                        "feedback_template": "反馈表模板",
+                        "config_snapshot": "配置快照",
+                        "readme": "交接说明",
+                        "file_manifest": "文件清单",
+                    }.get(key, key)
+                    print(f"    [FILE] {label} → {fpath}")
+            if os.path.isdir(handover.get("readme", "")):
+                pass
+            elif "readme" in handover:
+                base_dir = os.path.dirname(handover["readme"])
+                print(f"    [DIR] 交接包目录 → {base_dir}")
+            print()
+        except Exception as e:
+            print(f"  ⚠ 打包交接资料失败: {e}")
 
     if issues:
-        print("  💡 如需跟踪整改，可使用 feedback 子命令:")
-        print(f"     python main.py feedback {app_config.project_name} {check_date} --feedback <反馈表文件>")
+        print("  💡 整改闭环:")
+        print(f"     1) 将反馈模板发给施工员，按问题编号逐条填写")
+        print(f"     2) 回收反馈表后运行:")
+        print(f"        python main.py feedback {app_config.project_name} {check_date} --feedback <反馈表文件>")
         print()
 
     if issues:
@@ -312,20 +435,19 @@ def cmd_feedback(args):
     if not args.quiet:
         print()
         print("╔══════════════════════════════════════════════════════════╗")
-        print("║       桩基施工记录校核 — 整改跟踪  v3.0               ║")
+        print("║       桩基施工记录校核 — 整改跟踪  v4.0               ║")
         print("╚══════════════════════════════════════════════════════════╝")
         print()
         print(f"  项目名称: {app_config.project_name}")
         print(f"  检查日期: {check_date}")
         print(f"  反馈文件: {args.feedback}")
         print()
-        print("  正在读取校核报告...")
 
     report_dir = os.path.abspath(app_config.output_dir)
     safe_date = check_date.replace("/", "-").replace(":", "-")
     base_name = f"{app_config.project_name}_{safe_date}_桩基校核报告"
-
     csv_path = os.path.join(report_dir, f"{base_name}.csv")
+
     if not os.path.isfile(csv_path):
         print(f"  ✗ 未找到校核报告 CSV: {csv_path}")
         print("    请先运行 check 命令生成校核报告")
@@ -346,23 +468,7 @@ def cmd_feedback(args):
     if not args.quiet:
         print(f"  ✓ 读取到 {len(feedback_entries)} 条反馈")
 
-    import csv as csv_mod
-    from pile_checker.checker import Issue
-    issues = []
-    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv_mod.DictReader(f)
-        for row in reader:
-            issues.append(Issue(
-                issue_type="",
-                file_name=row.get("文件名", ""),
-                pile_no=row.get("桩号", ""),
-                reason=row.get("疑似原因", ""),
-                suggestion=row.get("建议复核项", ""),
-                detail=row.get("详细信息", ""),
-                row_index=int(row.get("行号", 0) or 0),
-                issue_id=row.get("问题编号", ""),
-            ))
-
+    issues = _load_issues_from_report_csv(csv_path)
     if not issues:
         print("  ✗ 校核报告中无问题记录")
         sys.exit(2)
@@ -390,6 +496,182 @@ def cmd_feedback(args):
         print(f"    [{fmt.upper()}] {label} → {fpath}")
     print()
 
+    if not getattr(args, "no_export", False):
+        report_files = {}
+        for ext in ("txt", "csv", "xlsx"):
+            fpath = os.path.join(report_dir, f"{base_name}.{ext}")
+            if os.path.isfile(fpath):
+                report_files[ext] = fpath
+        if report_files:
+            print("  正在打包交接资料（含整改跟踪）...")
+            try:
+                handover = build_handover_package(
+                    project_name=app_config.project_name,
+                    check_date=check_date,
+                    output_dir=report_dir,
+                    app_config=app_config,
+                    report_files=report_files,
+                    feedback_report_files=fb_report_files,
+                    include_zip=not getattr(args, "no_zip", False),
+                )
+                print("  交接资料:")
+                for key, fpath in handover.items():
+                    if key == "zip":
+                        print(f"    [ZIP] 压缩包 → {fpath}")
+                    elif key.startswith("report_") or key.startswith("feedback_"):
+                        continue
+                    else:
+                        label = {
+                            "feedback_template": "反馈表模板",
+                            "config_snapshot": "配置快照",
+                            "readme": "交接说明",
+                            "file_manifest": "文件清单",
+                        }.get(key, key)
+                        print(f"    [FILE] {label} → {fpath}")
+                print()
+            except Exception as e:
+                print(f"  ⚠ 打包交接资料失败: {e}")
+
+
+def cmd_history(args):
+    app_config, check_date = _load_config(args)
+    app_config.ensure_dirs()
+
+    if not args.quiet:
+        print()
+        print("╔══════════════════════════════════════════════════════════╗")
+        print("║       桩基施工记录校核 — 多日复查视图  v4.0           ║")
+        print("╚══════════════════════════════════════════════════════════╝")
+        print()
+        print(f"  项目名称: {app_config.project_name}")
+        if args.from_date or args.to_date:
+            print(f"  日期范围: {args.from_date or '最早'} ~ {args.to_date or '最新'}")
+        print(f"  报告目录: {os.path.abspath(app_config.output_dir)}")
+        print()
+        print("  正在分析历史报告...")
+
+    report_dir = os.path.abspath(app_config.output_dir)
+    history = build_history(report_dir, args.from_date, args.to_date)
+
+    if not history:
+        print("  ✗ 未找到可用的历史校核报告（需要有 *_桩基校核报告.csv 文件）")
+        print("    请先运行 check 命令生成至少 1 天的报告")
+        sys.exit(2)
+
+    persistent, details = find_persistent_issues(
+        report_dir,
+        min_days=args.persistent_days,
+        start_date=args.from_date,
+        end_date=args.to_date,
+    )
+
+    if not args.quiet:
+        print(f"  ✓ 分析完成，覆盖 {len(history)} 天，持续问题 {len(persistent)} 条")
+        print()
+
+    dates = sorted(history.keys())
+    print("  每日概览:")
+    print(f"    {'日期':<12}  {'问题':>5}  {'新增':>5}  {'持续':>5}  {'已解决':>6}")
+    for d in dates:
+        s = history[d]
+        print(
+            f"    {d:<12}  {s.total_issues:>5}  {len(s.new_issues):>5}  "
+            f"{len(s.persistent_issues):>5}  {len(s.resolved_issues):>6}"
+        )
+    if persistent:
+        print()
+        print(f"  连续 ≥{args.persistent_days} 天未关闭: {len(persistent)} 条")
+        for issue_id, dates_list in sorted(persistent.items(), key=lambda x: -len(x[1]))[:5]:
+            snap = details.get(issue_id)
+            label = f"[{snap.severity}] {snap.issue_type}" if snap else ""
+            print(f"    · {issue_id} {label}  连续{len(dates_list)}天")
+
+    print()
+
+    rep_files = save_history_reports(
+        app_config.project_name, report_dir,
+        history, persistent, details,
+        args.from_date or "", args.to_date or "",
+        no_xlsx=args.no_xlsx,
+    )
+    print("  历史报告:")
+    for fmt, fpath in rep_files.items():
+        label = {"txt": "TXT 文本报告", "xlsx": "Excel 工作簿"}.get(fmt, fmt.upper())
+        print(f"    [{fmt.upper()}] {label} → {fpath}")
+    print()
+
+
+def cmd_export(args):
+    app_config, check_date = _load_config(args)
+    app_config.ensure_dirs()
+
+    if not args.quiet:
+        print()
+        print("╔══════════════════════════════════════════════════════════╗")
+        print("║       桩基施工记录校核 — 交接资料打包  v4.0           ║")
+        print("╚══════════════════════════════════════════════════════════╝")
+        print()
+        print(f"  项目名称: {app_config.project_name}")
+        print(f"  检查日期: {check_date}")
+        print()
+
+    report_dir = os.path.abspath(app_config.output_dir)
+    safe_date = check_date.replace("/", "-").replace(":", "-")
+    base_name = f"{app_config.project_name}_{safe_date}_桩基校核报告"
+
+    report_files = {}
+    for ext in ("txt", "csv", "xlsx"):
+        fpath = os.path.join(report_dir, f"{base_name}.{ext}")
+        if os.path.isfile(fpath):
+            report_files[ext] = fpath
+
+    fb_base = f"{app_config.project_name}_{safe_date}_整改跟踪报告"
+    feedback_files = {}
+    for ext in ("txt", "xlsx"):
+        fpath = os.path.join(report_dir, f"{fb_base}.{ext}")
+        if os.path.isfile(fpath):
+            feedback_files[ext] = fpath
+
+    if not report_files:
+        print(f"  ✗ 未找到 {check_date} 的校核报告，请先运行 check 命令")
+        sys.exit(2)
+
+    records, errors, file_metas = read_all_records(
+        os.path.abspath(app_config.input_dir),
+        app_config.check,
+        None,
+    )
+
+    print("  正在打包交接资料...")
+    handover = build_handover_package(
+        project_name=app_config.project_name,
+        check_date=check_date,
+        output_dir=report_dir,
+        app_config=app_config,
+        report_files=report_files,
+        feedback_report_files=feedback_files if feedback_files else None,
+        file_metas=file_metas,
+        include_zip=not getattr(args, "no_zip", False),
+    )
+    print("  交接资料:")
+    for key, fpath in handover.items():
+        if key == "zip":
+            print(f"    [ZIP] 压缩包 → {fpath}")
+        elif key.startswith("report_") or key.startswith("feedback_"):
+            continue
+        else:
+            label = {
+                "feedback_template": "反馈表模板",
+                "config_snapshot": "配置快照",
+                "readme": "交接说明",
+                "file_manifest": "文件清单",
+            }.get(key, key)
+            print(f"    [FILE] {label} → {fpath}")
+    if "readme" in handover:
+        base_dir = os.path.dirname(handover["readme"])
+        print(f"    [DIR] 交接包目录 → {base_dir}")
+    print()
+
 
 def main():
     parser = build_parser()
@@ -399,10 +681,14 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    if args.command == "check" or args.command == "run":
+    if args.command in ("check", "run"):
         cmd_check(args)
     elif args.command == "feedback":
         cmd_feedback(args)
+    elif args.command == "history":
+        cmd_history(args)
+    elif args.command == "export":
+        cmd_export(args)
     else:
         parser.print_help()
         sys.exit(0)
