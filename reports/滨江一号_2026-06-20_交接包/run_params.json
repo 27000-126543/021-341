@@ -1,0 +1,150 @@
+{
+  "project_name": "滨江一号",
+  "check_date": "2026-06-20",
+  "generated_at": "2026-06-21 05:40:34",
+  "filter_date": false,
+  "pile_prefix": "ZK",
+  "volume_tolerance": 0.05,
+  "pouring_hours": 24,
+  "pile_diameter": 800,
+  "check_config": {
+    "project_name": "滨江一号",
+    "input_dir": "./records",
+    "output_dir": "./reports",
+    "date_filter": {
+      "enabled": false,
+      "target_date": "2026-06-20",
+      "match_from_filename": true,
+      "match_from_record": true
+    },
+    "check": {
+      "concrete_volume_tolerance": 0.05,
+      "max_pouring_interval_hours": 24.0,
+      "min_hole_depth_margin": 0.0,
+      "expected_pile_count": 0,
+      "pile_prefix": "ZK",
+      "default_pile_diameter": null,
+      "pile_number_start": null,
+      "pile_number_end": null,
+      "field_mapping": {
+        "pile_no": [
+          "桩号",
+          "桩编号",
+          "桩号编号",
+          "pile_no",
+          "pile_number"
+        ],
+        "design_length": [
+          "设计桩长",
+          "设计桩长(m)",
+          "设计长度",
+          "design_length"
+        ],
+        "actual_hole_depth": [
+          "实际孔深",
+          "实际孔深(m)",
+          "孔深",
+          "hole_depth"
+        ],
+        "concrete_volume": [
+          "混凝土方量",
+          "砼方量",
+          "混凝土用量",
+          "concrete_volume"
+        ],
+        "theoretical_volume": [
+          "理论方量",
+          "设计方量",
+          "theoretical_volume"
+        ],
+        "hole_finish_time": [
+          "成孔时间",
+          "成孔完成时间",
+          "钻孔完成时间",
+          "hole_finish_time"
+        ],
+        "pouring_start_time": [
+          "灌注开始时间",
+          "开盘时间",
+          "灌注时间",
+          "pouring_time"
+        ],
+        "pile_diameter": [
+          "桩径",
+          "设计桩径",
+          "桩径(mm)",
+          "diameter"
+        ]
+      }
+    }
+  },
+  "file_metas": [
+    {
+      "name": "2026-06-20_一区桩基记录.csv",
+      "path": "D:\\trae-bz\\TraeProjects\\341\\records\\2026-06-20_一区桩基记录.csv",
+      "included": true,
+      "exclude_reason": "",
+      "record_count": 5,
+      "total_rows_read": 5,
+      "rows_filtered_by_date": 0,
+      "date_from_name": "2026-06-20",
+      "size_kb": 0.4287109375
+    },
+    {
+      "name": "2026-06-21_三区桩基记录.xlsx",
+      "path": "D:\\trae-bz\\TraeProjects\\341\\records\\2026-06-21_三区桩基记录.xlsx",
+      "included": true,
+      "exclude_reason": "",
+      "record_count": 3,
+      "total_rows_read": 3,
+      "rows_filtered_by_date": 0,
+      "date_from_name": "2026-06-21",
+      "size_kb": 5.06640625
+    },
+    {
+      "name": "2026-06-21_二区桩基记录.csv",
+      "path": "D:\\trae-bz\\TraeProjects\\341\\records\\2026-06-21_二区桩基记录.csv",
+      "included": true,
+      "exclude_reason": "",
+      "record_count": 6,
+      "total_rows_read": 6,
+      "rows_filtered_by_date": 0,
+      "date_from_name": "2026-06-21",
+      "size_kb": 0.490234375
+    },
+    {
+      "name": "2026-06-21_五区自定义表头.csv",
+      "path": "D:\\trae-bz\\TraeProjects\\341\\records\\2026-06-21_五区自定义表头.csv",
+      "included": true,
+      "exclude_reason": "",
+      "record_count": 5,
+      "total_rows_read": 5,
+      "rows_filtered_by_date": 0,
+      "date_from_name": "2026-06-21",
+      "size_kb": 0.416015625
+    },
+    {
+      "name": "2026-06-21_四区异常记录.csv",
+      "path": "D:\\trae-bz\\TraeProjects\\341\\records\\2026-06-21_四区异常记录.csv",
+      "included": true,
+      "exclude_reason": "",
+      "record_count": 6,
+      "total_rows_read": 6,
+      "rows_filtered_by_date": 0,
+      "date_from_name": "2026-06-21",
+      "size_kb": 0.4697265625
+    },
+    {
+      "name": "混合日期记录.csv",
+      "path": "D:\\trae-bz\\TraeProjects\\341\\records\\混合日期记录.csv",
+      "included": true,
+      "exclude_reason": "",
+      "record_count": 5,
+      "total_rows_read": 5,
+      "rows_filtered_by_date": 0,
+      "date_from_name": "",
+      "size_kb": 0.431640625
+    }
+  ],
+  "extra": {}
+}

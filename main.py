@@ -7,6 +7,7 @@
   feedback - 导入施工员反馈表，生成整改跟踪闭环汇总
   export   - 一键打包交接资料（报告 + 配置快照 + 反馈模板 + 文件清单）
   history  - 多日复查视图：查看问题新增/持续/消失，生成日报汇总
+  archive  - 归档台账视图：查看各项目各日期资料齐全度，导出台账表
 """
 
 import sys
@@ -29,10 +30,11 @@ from pile_checker.feedback import (
     read_feedback, merge_feedback, status_summary,
     save_feedback_reports,
 )
-from pile_checker.export import build_handover_package
+from pile_checker.export import build_handover_package, load_run_params
 from pile_checker.history import (
     build_history, find_persistent_issues, save_history_reports,
 )
+from pile_checker.archive import scan_archive, save_archive_reports
 
 
 def _looks_like_date(s: str) -> bool:
@@ -131,6 +133,13 @@ def _add_export_args(parser):
                         help="安静模式")
 
 
+def _add_archive_args(parser):
+    parser.add_argument("--no-xlsx", action="store_true",
+                        help="不生成 Excel 格式台账")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="安静模式")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="桩基施工记录批量校核工具 v4.0",
@@ -181,6 +190,17 @@ def build_parser():
     _add_common_args(p_export)
     _add_export_args(p_export)
 
+    p_archive = sub.add_parser("archive", help="归档台账视图，查看各日期资料齐全度",
+                               formatter_class=argparse.RawDescriptionHelpFormatter,
+                               epilog="""
+示例:
+  python main.py archive 滨江一号
+  python main.py archive -c projects/滨江一号.json
+  python main.py archive                    # 查看所有项目台账
+                               """)
+    _add_common_args(p_archive)
+    _add_archive_args(p_archive)
+
     p_run = sub.add_parser("run", help="[兼容] 等同于 check",
                            formatter_class=argparse.RawDescriptionHelpFormatter)
     _add_common_args(p_run)
@@ -227,7 +247,7 @@ def _apply_cli_overrides(app_cfg: AppConfig, args):
         df.enabled = False
 
 
-def _load_config(args):
+def _load_config(args, require_date: bool = True):
     if getattr(args, "config_file", None):
         try:
             app_config = load_project_config(args.config_file)
@@ -252,10 +272,12 @@ def _load_config(args):
 
     _apply_cli_overrides(app_config, args)
 
-    check_date = args.check_date or datetime.now().strftime("%Y-%m-%d")
-    app_config.date_filter.target_date = check_date
+    check_date = None
+    if require_date:
+        check_date = args.check_date or datetime.now().strftime("%Y-%m-%d")
+        app_config.date_filter.target_date = check_date
 
-    if not app_config.project_name:
+    if require_date and not app_config.project_name:
         print("  ✗ 项目名称缺失。请指定 project_name 或使用 -c 配置文件。")
         sys.exit(2)
 
@@ -551,7 +573,7 @@ def cmd_history(args):
         print("  正在分析历史报告...")
 
     report_dir = os.path.abspath(app_config.output_dir)
-    history = build_history(report_dir, args.from_date, args.to_date)
+    history = build_history(report_dir, app_config.project_name, args.from_date, args.to_date)
 
     if not history:
         print("  ✗ 未找到可用的历史校核报告（需要有 *_桩基校核报告.csv 文件）")
@@ -560,6 +582,7 @@ def cmd_history(args):
 
     persistent, details = find_persistent_issues(
         report_dir,
+        project_name=app_config.project_name,
         min_days=args.persistent_days,
         start_date=args.from_date,
         end_date=args.to_date,
@@ -617,6 +640,21 @@ def cmd_export(args):
 
     report_dir = os.path.abspath(app_config.output_dir)
     safe_date = check_date.replace("/", "-").replace(":", "-")
+
+    package_dir = os.path.join(report_dir, f"{app_config.project_name}_{safe_date}_交接包")
+    run_params = load_run_params(package_dir) if os.path.isdir(package_dir) else None
+
+    if run_params:
+        print(f"  ✓ 检测到历史运行参数（生成于 {run_params.get('generated_at', '')}）")
+        print(f"    筛选口径: {'日期筛选' if run_params.get('filter_date') else '未筛选'}")
+        print(f"    桩号前缀: {run_params.get('pile_prefix', '')}")
+        if not args.quiet:
+            print()
+    else:
+        print("  ⚠ 未检测到历史运行参数，将使用当前配置重新生成")
+        print("    （建议先运行 check 命令后再打包，确保参数一致）")
+        print()
+
     base_name = f"{app_config.project_name}_{safe_date}_桩基校核报告"
 
     report_files = {}
@@ -636,11 +674,13 @@ def cmd_export(args):
         print(f"  ✗ 未找到 {check_date} 的校核报告，请先运行 check 命令")
         sys.exit(2)
 
-    records, errors, file_metas = read_all_records(
-        os.path.abspath(app_config.input_dir),
-        app_config.check,
-        None,
-    )
+    file_metas = None
+    if not run_params:
+        records, errors, file_metas = read_all_records(
+            os.path.abspath(app_config.input_dir),
+            app_config.check,
+            None,
+        )
 
     print("  正在打包交接资料...")
     handover = build_handover_package(
@@ -652,6 +692,8 @@ def cmd_export(args):
         feedback_report_files=feedback_files if feedback_files else None,
         file_metas=file_metas,
         include_zip=not getattr(args, "no_zip", False),
+        run_params=run_params,
+        readonly=run_params is not None,
     )
     print("  交接资料:")
     for key, fpath in handover.items():
@@ -673,6 +715,72 @@ def cmd_export(args):
     print()
 
 
+def cmd_archive(args):
+    app_config, _ = _load_config(args, require_date=False)
+    app_config.ensure_dirs()
+    report_dir = os.path.abspath(app_config.output_dir)
+
+    if not args.quiet:
+        print()
+        print("╔══════════════════════════════════════════════════════════╗")
+        print("║       桩基施工记录校核 — 归档台账视图  v4.0           ║")
+        print("╚══════════════════════════════════════════════════════════╝")
+        print()
+        print(f"  报告目录: {report_dir}")
+        if app_config.project_name and app_config.project_name != "项目":
+            print(f"  项目过滤: {app_config.project_name}")
+        print()
+        print("  正在扫描归档资料...")
+
+    archive_data = scan_archive(report_dir)
+    proj_filter = app_config.project_name if app_config.project_name and app_config.project_name != "项目" else None
+
+    if not archive_data:
+        print("  ✗ 未找到任何归档资料，请先运行 check 命令生成报告")
+        sys.exit(2)
+
+    if proj_filter and proj_filter not in archive_data:
+        print(f"  ✗ 未找到项目 [{proj_filter}] 的归档资料")
+        print(f"    可用项目: {', '.join(archive_data.keys())}")
+        sys.exit(2)
+
+    rep_files = save_archive_reports(
+        proj_filter,
+        report_dir,
+        archive_data,
+        no_xlsx=args.no_xlsx,
+    )
+
+    if proj_filter and proj_filter in archive_data:
+        dates = sorted(archive_data[proj_filter].keys())
+        total = len(dates)
+        complete = sum(1 for d in dates if archive_data[proj_filter][d].completeness >= 0.75)
+        missing = [d for d in dates if archive_data[proj_filter][d].completeness < 0.75]
+        print(f"  ✓ 扫描完成，项目 [{proj_filter}] 共 {total} 天资料")
+        print(f"    完整度 ≥75%: {complete} 天")
+        if missing:
+            print(f"    需补资料: {', '.join(missing[:5])}")
+            if len(missing) > 5:
+                print(f"             等共 {len(missing)} 天")
+        print()
+    else:
+        project_count = len(archive_data)
+        total_days = sum(len(v) for v in archive_data.values())
+        print(f"  ✓ 扫描完成，共 {project_count} 个项目，{total_days} 天资料")
+        for proj in sorted(archive_data.keys())[:5]:
+            dates = sorted(archive_data[proj].keys())
+            print(f"    · {proj}: {len(dates)} 天")
+        if project_count > 5:
+            print(f"      等共 {project_count} 个项目")
+        print()
+
+    print("  归档台账:")
+    for fmt, fpath in rep_files.items():
+        label = {"txt": "TXT 文本台账", "xlsx": "Excel 工作簿"}.get(fmt, fmt.upper())
+        print(f"    [{fmt.upper()}] {label} → {fpath}")
+    print()
+
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -689,6 +797,8 @@ def main():
         cmd_history(args)
     elif args.command == "export":
         cmd_export(args)
+    elif args.command == "archive":
+        cmd_archive(args)
     else:
         parser.print_help()
         sys.exit(0)

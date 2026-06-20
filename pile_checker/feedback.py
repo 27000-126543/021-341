@@ -261,14 +261,16 @@ def generate_feedback_report_text(project_name: str, check_date: str,
             )
             lines.append(f"    原因: {item['reason']}")
             if item["remark"]:
-                handler_str = f"（{item['handler']}）" if item["handler"] else (
-                    f"（{item['responder']}）" if item["responder"] else ""
-                )
-                lines.append(f"    反馈: {item['remark']}{handler_str}")
+                responder_str = f"（{item['responder']}）" if item["responder"] else ""
+                lines.append(f"    反馈: {item['remark']}{responder_str}")
+            if item["handler"]:
+                lines.append(f"    处理责任人: {item['handler']}")
             if item["review_date"]:
                 lines.append(f"    复核日期: {item['review_date']}")
             if item["feedback_date"]:
                 lines.append(f"    反馈日期: {item['feedback_date']}")
+            if item["responder"] and not item["remark"]:
+                lines.append(f"    整改人: {item['responder']}")
             if item["attachment"]:
                 lines.append(f"    附件: {item['attachment']}")
             lines.append("")

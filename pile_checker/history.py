@@ -49,17 +49,44 @@ def _extract_date_from_filename(filename: str) -> Optional[str]:
     return None
 
 
-def _find_report_files(report_dir: str) -> List[Tuple[str, str]]:
+def _find_report_files(report_dir: str, project_name: Optional[str] = None) -> List[Tuple[str, str]]:
     files = []
     if not os.path.isdir(report_dir):
         return files
     for name in sorted(os.listdir(report_dir)):
         if not name.endswith("_桩基校核报告.csv"):
             continue
+        if project_name:
+            prefix = f"{project_name}_"
+            if not name.startswith(prefix):
+                continue
         date_str = _extract_date_from_filename(name)
         if date_str:
             files.append((date_str, os.path.join(report_dir, name)))
     return files
+
+
+def _find_longest_consecutive_streak(dates: List[str]) -> Tuple[int, List[str]]:
+    if not dates:
+        return 0, []
+    sorted_dates = sorted(set(dates))
+    max_len = 1
+    max_start = 0
+    cur_len = 1
+    cur_start = 0
+    for i in range(1, len(sorted_dates)):
+        d_prev = datetime.strptime(sorted_dates[i - 1], "%Y-%m-%d")
+        d_curr = datetime.strptime(sorted_dates[i], "%Y-%m-%d")
+        if (d_curr - d_prev).days == 1:
+            cur_len += 1
+            if cur_len > max_len:
+                max_len = cur_len
+                max_start = cur_start
+        else:
+            cur_len = 1
+            cur_start = i
+    streak = sorted_dates[max_start:max_start + max_len]
+    return max_len, streak
 
 
 def load_issues_from_csv(csv_path: str) -> Dict[str, DailyIssueSnapshot]:
@@ -94,9 +121,10 @@ def load_issues_from_csv(csv_path: str) -> Dict[str, DailyIssueSnapshot]:
 
 
 def build_history(report_dir: str,
+                  project_name: Optional[str] = None,
                   start_date: Optional[str] = None,
                   end_date: Optional[str] = None) -> Dict[str, DailySummary]:
-    all_files = _find_report_files(report_dir)
+    all_files = _find_report_files(report_dir, project_name)
     if not all_files:
         return {}
 
@@ -130,12 +158,13 @@ def build_history(report_dir: str,
 
 
 def find_persistent_issues(report_dir: str,
+                           project_name: Optional[str] = None,
                            min_days: int = 2,
                            start_date: Optional[str] = None,
                            end_date: Optional[str] = None) -> Dict[str, List[str]]:
-    all_files = _find_report_files(report_dir)
+    all_files = _find_report_files(report_dir, project_name)
     if not all_files:
-        return {}
+        return {}, {}
     if start_date:
         all_files = [(d, p) for d, p in all_files if d >= start_date]
     if end_date:
@@ -152,10 +181,13 @@ def find_persistent_issues(report_dir: str,
             if issue_id not in all_details:
                 all_details[issue_id] = snap
 
-    return {
-        issue_id: dates for issue_id, dates in appearances.items()
-        if len(dates) >= min_days
-    }, all_details
+    persistent = {}
+    for issue_id, all_dates in appearances.items():
+        streak_len, streak_dates = _find_longest_consecutive_streak(all_dates)
+        if streak_len >= min_days:
+            persistent[issue_id] = streak_dates
+
+    return persistent, all_details
 
 
 def generate_history_report_text(project_name: str,
