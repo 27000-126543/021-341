@@ -45,13 +45,20 @@ def generate_text_report(project_name: str, check_date: str, issues: List[Issue]
     if file_metas:
         included = [m for m in file_metas if m.included]
         excluded = [m for m in file_metas if not m.included]
+        total_filtered = sum(m.rows_filtered_by_date for m in file_metas)
         if included:
             lines.append("")
             lines.append("【本次纳入文件】")
             lines.append("-" * 78)
             for m in included:
                 date_str = m.date_from_name.strftime("%Y-%m-%d") if m.date_from_name else "未识别"
-                lines.append(f"  · {m.name}  [{date_str}]  共 {m.record_count} 条记录")
+                filter_note = ""
+                if m.rows_filtered_by_date > 0:
+                    filter_note = f"  [筛除非当天 {m.rows_filtered_by_date} 条]"
+                lines.append(f"  · {m.name}  [{date_str}]  纳入 {m.record_count} 条{filter_note}")
+        if total_filtered > 0:
+            lines.append("")
+            lines.append(f"  ※ 日期筛选共排除非当天记录 {total_filtered} 条（按记录行内日期逐行筛选）")
         if excluded:
             lines.append("")
             lines.append("【已排除文件】")
@@ -124,7 +131,7 @@ def generate_text_report(project_name: str, check_date: str, issues: List[Issue]
             lines.append(f"      ▶ {current_file}")
 
         sev_icon = SEVERITY_ICONS.get(issue.severity, "")
-        lines.append(f"      {sev_icon} [{idx}] 桩号: {issue.pile_no}")
+        lines.append(f"      {sev_icon} [{idx}] ({issue.issue_id}) 桩号: {issue.pile_no}")
         lines.append(f"           疑似原因: {issue.reason}")
         lines.append(f"           建议复核: {issue.suggestion}")
         if issue.detail:
@@ -144,12 +151,13 @@ def generate_csv_report(issues: List[Issue], project_name: str = "",
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "序号", "严重程度", "问题类型", "项目名称", "检查日期",
+        "问题编号", "序号", "严重程度", "问题类型", "项目名称", "检查日期",
         "文件名", "桩号", "行号", "疑似原因", "建议复核项",
         "详细信息", "是否整改", "整改说明"
     ])
     for i, issue in enumerate(issues, 1):
         writer.writerow([
+            issue.issue_id,
             i,
             issue.severity,
             issue.type_label,
@@ -238,7 +246,7 @@ def generate_excel_report(issues: List[Issue], out_path: str,
 
     ws_detail = wb.create_sheet("问题明细表")
     headers = [
-        "序号", "严重程度", "问题类型", "文件名", "桩号", "行号",
+        "问题编号", "序号", "严重程度", "问题类型", "文件名", "桩号", "行号",
         "疑似原因", "建议复核项", "详细信息", "是否整改", "整改说明"
     ]
     ws_detail.append(headers)
@@ -256,6 +264,7 @@ def generate_excel_report(issues: List[Issue], out_path: str,
 
     for i, issue in enumerate(issues, 1):
         row = [
+            issue.issue_id,
             i,
             issue.severity,
             issue.type_label,
@@ -272,14 +281,14 @@ def generate_excel_report(issues: List[Issue], out_path: str,
         color_fill = sev_color.get(issue.severity)
         for col_idx, cell in enumerate(ws_detail[ws_detail.max_row], 1):
             cell.border = border
-            if col_idx == 2 and color_fill:
+            if col_idx == 3 and color_fill:
                 cell.fill = color_fill
-            if col_idx in (1, 2, 3, 5, 6):
+            if col_idx in (1, 2, 3, 4, 6, 7):
                 cell.alignment = center
             else:
                 cell.alignment = left
 
-    widths = [6, 10, 18, 28, 12, 8, 50, 40, 30, 10, 30]
+    widths = [14, 6, 10, 18, 28, 12, 8, 50, 40, 30, 10, 30]
     for idx, w in enumerate(widths, 1):
         ws_detail.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = w
     ws_detail.freeze_panes = "A2"
@@ -331,12 +340,18 @@ def print_console_summary(issues: List[Issue], total_records: int,
     if file_metas:
         included = [m for m in file_metas if m.included]
         excluded = [m for m in file_metas if not m.included]
+        total_filtered = sum(m.rows_filtered_by_date for m in file_metas)
         print(f"  扫描文件 {len(file_metas)} 份，纳入检查 {len(included)} 份，排除 {len(excluded)} 份")
         if included:
             print(f"  纳入文件:")
             for m in included:
                 date_str = m.date_from_name.strftime("%m-%d") if m.date_from_name else "日期未识别"
-                print(f"    · {m.name}  [{date_str}]  {m.record_count} 条")
+                filter_note = ""
+                if m.rows_filtered_by_date > 0:
+                    filter_note = f" (筛除非当天 {m.rows_filtered_by_date} 条)"
+                print(f"    · {m.name}  [{date_str}]  纳入 {m.record_count} 条{filter_note}")
+        if total_filtered > 0:
+            print(f"  ※ 日期筛选共排除非当天记录 {total_filtered} 条")
         if excluded:
             print(f"  排除文件:")
             for m in excluded:

@@ -1,4 +1,5 @@
 import re
+import hashlib
 from datetime import datetime
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
@@ -19,6 +20,14 @@ ISSUE_TYPES = {
 }
 
 
+def _make_issue_id(issue_type: str, file_name: str, row_index: int,
+                   pile_no: str, detail: str = "") -> str:
+    raw = f"{issue_type}|{file_name}|{row_index}|{pile_no}|{detail}"
+    h = hashlib.md5(raw.encode("utf-8")).hexdigest()[:8].upper()
+    short_type = issue_type[:3].upper()
+    return f"{short_type}-{h}"
+
+
 @dataclass
 class Issue:
     issue_type: str
@@ -28,6 +37,14 @@ class Issue:
     suggestion: str
     detail: str = ""
     row_index: int = 0
+    issue_id: str = ""
+
+    def __post_init__(self):
+        if not self.issue_id:
+            self.issue_id = _make_issue_id(
+                self.issue_type, self.file_name, self.row_index,
+                self.pile_no, self.detail,
+            )
 
     @property
     def type_label(self) -> str:
@@ -54,21 +71,35 @@ def _extract_pile_number(pile_no: str, prefix: str = "") -> Tuple[str, int]:
     return base, 0
 
 
+def _format_field_hints(rec: PileRecord) -> str:
+    hints = []
+    if rec.design_length is not None:
+        hints.append(f"设计桩长={rec.design_length}")
+    if rec.actual_hole_depth is not None:
+        hints.append(f"实际孔深={rec.actual_hole_depth}")
+    if rec.concrete_volume is not None:
+        hints.append(f"方量={rec.concrete_volume}")
+    if rec.theoretical_volume is not None:
+        hints.append(f"理论方量={rec.theoretical_volume}")
+    if rec.pile_diameter is not None:
+        hints.append(f"桩径={rec.pile_diameter}")
+    if rec.hole_finish_time is not None:
+        hints.append(f"成孔={rec.hole_finish_time.strftime('%m-%d %H:%M')}")
+    if rec.pouring_start_time is not None:
+        hints.append(f"灌注={rec.pouring_start_time.strftime('%m-%d %H:%M')}")
+    return f"（{', '.join(hints)}）" if hints else ""
+
+
 def check_pile_no_empty(records: List[PileRecord]) -> List[Issue]:
     issues = []
     for rec in records:
-        if not rec.pile_no:
-            extras = []
-            if rec.design_length is not None:
-                extras.append(f"设计桩长={rec.design_length}")
-            if rec.concrete_volume is not None:
-                extras.append(f"方量={rec.concrete_volume}")
-            extra_hint = f"（{', '.join(extras)}）" if extras else ""
+        if not rec.pile_no and rec.has_any_data():
+            hint = _format_field_hints(rec)
             issues.append(Issue(
                 issue_type="pile_no_empty",
                 file_name=rec.source_file,
                 pile_no="(空)",
-                reason=f"该行桩号为空{extra_hint}，其他字段已填写，疑似漏填桩号",
+                reason=f"该行桩号为空{hint}，已有数据填写但漏了桩号",
                 suggestion="补填桩号后再审；如为汇总/空行请删除整行",
                 detail=f"第 {rec.row_index} 行",
                 row_index=rec.row_index,

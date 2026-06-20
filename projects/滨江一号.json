@@ -5,7 +5,7 @@
   "date_filter": {
     "enabled": false,
     "target_date": null,
-    "match_from_filename": true,
+    "match_from_filename": false,
     "match_from_record": true
   },
   "check": {
@@ -16,6 +16,16 @@
     "pile_prefix": "ZK",
     "default_pile_diameter": 800,
     "pile_number_start": 1,
-    "pile_number_end": 120
+    "pile_number_end": 120,
+    "field_mapping": {
+      "pile_no": ["桩号", "桩编号", "桩号编号", "pile_no", "pile_number"],
+      "design_length": ["设计桩长", "设计桩长(m)", "设计长度", "design_length"],
+      "actual_hole_depth": ["实际孔深", "实际孔深(m)", "孔深", "实际孔深米", "hole_depth"],
+      "concrete_volume": ["混凝土方量", "砼方量", "混凝土用量", "砼浇筑量", "concrete_volume"],
+      "theoretical_volume": ["理论方量", "设计方量", "theoretical_volume"],
+      "hole_finish_time": ["成孔时间", "成孔完成时间", "钻孔完成时间", "hole_finish_time"],
+      "pouring_start_time": ["灌注开始时间", "开盘时间", "灌注时间", "pouring_time"],
+      "pile_diameter": ["桩径", "设计桩径", "桩径(mm)", "diameter"]
+    }
   }
 }

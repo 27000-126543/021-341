@@ -36,6 +36,18 @@ class PileRecord:
                 return datetime(t.year, t.month, t.day)
         return None
 
+    def has_any_data(self) -> bool:
+        return bool(
+            self.pile_no
+            or self.design_length is not None
+            or self.actual_hole_depth is not None
+            or self.concrete_volume is not None
+            or self.theoretical_volume is not None
+            or self.pile_diameter is not None
+            or self.hole_finish_time is not None
+            or self.pouring_start_time is not None
+        )
+
 
 @dataclass
 class FileMeta:
@@ -45,6 +57,8 @@ class FileMeta:
     included: bool = True
     exclude_reason: str = ""
     record_count: int = 0
+    total_rows_read: int = 0
+    rows_filtered_by_date: int = 0
 
 
 def _find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
@@ -203,42 +217,24 @@ def read_excel_file(file_path: str, config: CheckConfig) -> List[PileRecord]:
     return records
 
 
-def _is_blank_record(rec: PileRecord) -> bool:
-    return (
-        not rec.pile_no
-        and rec.design_length is None
-        and rec.actual_hole_depth is None
-        and rec.concrete_volume is None
-    )
-
-
 def filter_records_by_date(records: List[PileRecord], date_filter: DateFilter,
-                           file_date: Optional[datetime]) -> Tuple[List[PileRecord], str]:
+                           file_date: Optional[datetime]) -> Tuple[List[PileRecord], int]:
     if not date_filter.enabled or not date_filter.target_date:
-        return records, ""
+        return records, 0
+
     target = date_filter.parse_target()
     if target is None:
-        return records, ""
+        return records, 0
     target_day = datetime(target.year, target.month, target.day)
 
-    if date_filter.match_from_filename and file_date is not None:
-        file_day = datetime(file_date.year, file_date.month, file_date.day)
-        if file_day == target_day:
-            return records, ""
-
     included = []
-    if date_filter.match_from_record:
-        for rec in records:
-            rec_day = rec.record_date()
-            if rec_day and datetime(rec_day.year, rec_day.month, rec_day.day) == target_day:
-                included.append(rec)
-        if included:
-            return included, ""
+    for rec in records:
+        rec_day = rec.record_date()
+        if rec_day is not None and datetime(rec_day.year, rec_day.month, rec_day.day) == target_day:
+            included.append(rec)
 
-    reason = f"未匹配目标日期 {date_filter.target_date}"
-    if file_date:
-        reason += f"（文件日期 {file_date.strftime('%Y-%m-%d')}）"
-    return [], reason
+    filtered_count = len(records) - len(included)
+    return included, filtered_count
 
 
 def read_all_records(input_dir: str, config: CheckConfig,
@@ -278,17 +274,18 @@ def read_all_records(input_dir: str, config: CheckConfig,
             file_metas.append(meta)
             continue
 
-        recs = [r for r in recs if not _is_blank_record(r)]
-        meta.record_count = len(recs)
+        recs = [r for r in recs if r.has_any_data()]
+        meta.total_rows_read = len(recs)
 
         if date_filter and date_filter.enabled:
-            filtered, exclude_reason = filter_records_by_date(recs, date_filter, meta.date_from_name)
-            if not filtered and exclude_reason:
+            recs, filtered_count = filter_records_by_date(recs, date_filter, meta.date_from_name)
+            meta.rows_filtered_by_date = filtered_count
+            if not recs:
                 meta.included = False
-                meta.exclude_reason = exclude_reason
+                meta.exclude_reason = f"文件中 {meta.total_rows_read} 条记录均不匹配目标日期 {date_filter.target_date}"
+                meta.record_count = 0
                 file_metas.append(meta)
                 continue
-            recs = filtered
 
         meta.included = True
         meta.record_count = len(recs)

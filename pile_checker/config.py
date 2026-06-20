@@ -47,17 +47,21 @@ class CheckConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d.pop("field_mapping", None)
+        d["field_mapping"] = self.field_mapping
         return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CheckConfig":
         cfg = cls()
         for k, v in data.items():
-            if hasattr(cfg, k) and k != "field_mapping":
+            if k == "field_mapping":
+                if isinstance(v, dict):
+                    for fk, aliases in v.items():
+                        if isinstance(aliases, list):
+                            cfg.field_mapping[fk] = aliases
+                continue
+            if hasattr(cfg, k):
                 setattr(cfg, k, v)
-        if "field_mapping" in data and isinstance(data["field_mapping"], dict):
-            cfg.field_mapping.update(data["field_mapping"])
         return cfg
 
 
