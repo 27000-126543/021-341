@@ -2,9 +2,9 @@ import os
 import math
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .config import CheckConfig
+from .config import CheckConfig, DateFilter, extract_date_from_filename
 
 
 @dataclass
@@ -20,14 +20,31 @@ class PileRecord:
     source_file: str = ""
     row_index: int = 0
 
-    def calc_theoretical_volume(self) -> Optional[float]:
+    def calc_theoretical_volume(self, default_diameter: Optional[float] = None) -> Optional[float]:
         if self.theoretical_volume is not None:
             return self.theoretical_volume
-        if self.pile_diameter and self.design_length:
-            radius = self.pile_diameter / 2 / 1000.0
+        diameter = self.pile_diameter if self.pile_diameter else default_diameter
+        if diameter and self.design_length:
+            radius = diameter / 2 / 1000.0
             area = math.pi * radius * radius
             return area * self.design_length
         return None
+
+    def record_date(self) -> Optional[datetime]:
+        for t in (self.hole_finish_time, self.pouring_start_time):
+            if t is not None:
+                return datetime(t.year, t.month, t.day)
+        return None
+
+
+@dataclass
+class FileMeta:
+    path: str
+    name: str
+    date_from_name: Optional[datetime] = None
+    included: bool = True
+    exclude_reason: str = ""
+    record_count: int = 0
 
 
 def _find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
@@ -43,6 +60,8 @@ def _parse_float(value) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, (int, float)):
+        if isinstance(value, float) and math.isnan(value):
+            return None
         return float(value)
     s = str(value).strip()
     if not s:
@@ -58,6 +77,12 @@ def _parse_datetime(value) -> Optional[datetime]:
         return None
     if isinstance(value, datetime):
         return value
+    try:
+        import pandas as pd
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
     s = str(value).strip()
     if not s:
         return None
@@ -78,7 +103,7 @@ def _parse_datetime(value) -> Optional[datetime]:
             continue
     try:
         import pandas as pd
-        ts = pd.to_datetime(s)
+        ts = pd.to_datetime(s, errors="coerce")
         if pd.notna(ts):
             return ts.to_pydatetime()
     except Exception:
@@ -101,13 +126,13 @@ def read_csv_file(file_path: str, config: CheckConfig) -> List[PileRecord]:
             if col:
                 col_map[key] = col
         for i, row in enumerate(reader, start=2):
+            pile_no_raw = row.get(col_map.get("pile_no", ""), "")
+            pile_no = str(pile_no_raw).strip() if pile_no_raw is not None else ""
             rec = PileRecord(
-                pile_no=str(row.get(col_map.get("pile_no", ""), "")).strip(),
+                pile_no=pile_no,
                 source_file=filename,
                 row_index=i,
             )
-            if not rec.pile_no:
-                continue
             if "design_length" in col_map:
                 rec.design_length = _parse_float(row.get(col_map["design_length"]))
             if "actual_hole_depth" in col_map:
@@ -144,17 +169,16 @@ def read_excel_file(file_path: str, config: CheckConfig) -> List[PileRecord]:
             if col:
                 col_idx = header_row.index(col)
                 col_map[key] = col_idx
-        if "pile_no" not in col_map:
-            continue
+        has_pile_no_col = "pile_no" in col_map
         for row_idx in range(2, ws.max_row + 1):
             row_data = []
             for col_idx in range(ws.max_column):
                 cell = ws.cell(row=row_idx, column=col_idx + 1)
                 row_data.append(cell.value)
-            pile_no_val = row_data[col_map["pile_no"]] if col_map["pile_no"] < len(row_data) else ""
-            pile_no = str(pile_no_val).strip() if pile_no_val is not None else ""
-            if not pile_no:
-                continue
+            pile_no = ""
+            if has_pile_no_col and col_map["pile_no"] < len(row_data):
+                pile_no_val = row_data[col_map["pile_no"]]
+                pile_no = str(pile_no_val).strip() if pile_no_val is not None else ""
             rec = PileRecord(
                 pile_no=pile_no,
                 source_file=filename,
@@ -179,29 +203,96 @@ def read_excel_file(file_path: str, config: CheckConfig) -> List[PileRecord]:
     return records
 
 
-def read_all_records(input_dir: str, config: CheckConfig) -> Tuple[List[PileRecord], List[str]]:
-    all_records = []
-    errors = []
+def _is_blank_record(rec: PileRecord) -> bool:
+    return (
+        not rec.pile_no
+        and rec.design_length is None
+        and rec.actual_hole_depth is None
+        and rec.concrete_volume is None
+    )
+
+
+def filter_records_by_date(records: List[PileRecord], date_filter: DateFilter,
+                           file_date: Optional[datetime]) -> Tuple[List[PileRecord], str]:
+    if not date_filter.enabled or not date_filter.target_date:
+        return records, ""
+    target = date_filter.parse_target()
+    if target is None:
+        return records, ""
+    target_day = datetime(target.year, target.month, target.day)
+
+    if date_filter.match_from_filename and file_date is not None:
+        file_day = datetime(file_date.year, file_date.month, file_date.day)
+        if file_day == target_day:
+            return records, ""
+
+    included = []
+    if date_filter.match_from_record:
+        for rec in records:
+            rec_day = rec.record_date()
+            if rec_day and datetime(rec_day.year, rec_day.month, rec_day.day) == target_day:
+                included.append(rec)
+        if included:
+            return included, ""
+
+    reason = f"未匹配目标日期 {date_filter.target_date}"
+    if file_date:
+        reason += f"（文件日期 {file_date.strftime('%Y-%m-%d')}）"
+    return [], reason
+
+
+def read_all_records(input_dir: str, config: CheckConfig,
+                     date_filter: Optional[DateFilter] = None) -> Tuple[List[PileRecord], List[str], List[FileMeta]]:
+    all_records: List[PileRecord] = []
+    errors: List[str] = []
+    file_metas: List[FileMeta] = []
+
     if not os.path.isdir(input_dir):
         errors.append(f"输入目录不存在: {input_dir}")
-        return all_records, errors
+        return all_records, errors, file_metas
+
     supported_ext = (".xlsx", ".xls", ".csv")
     files = []
-    for fname in os.listdir(input_dir):
+    for fname in sorted(os.listdir(input_dir)):
         fpath = os.path.join(input_dir, fname)
         if os.path.isfile(fpath) and fname.lower().endswith(supported_ext):
             if not fname.startswith("~$"):
                 files.append(fpath)
+
     if not files:
         errors.append(f"目录 {input_dir} 中未找到 Excel 或 CSV 文件")
-        return all_records, errors
-    for fpath in sorted(files):
+        return all_records, errors, file_metas
+
+    for fpath in files:
+        fname = os.path.basename(fpath)
+        meta = FileMeta(path=fpath, name=fname, date_from_name=extract_date_from_filename(fname))
         try:
             if fpath.lower().endswith(".csv"):
                 recs = read_csv_file(fpath, config)
             else:
                 recs = read_excel_file(fpath, config)
-            all_records.extend(recs)
         except Exception as e:
-            errors.append(f"读取文件 {os.path.basename(fpath)} 失败: {str(e)}")
-    return all_records, errors
+            errors.append(f"读取文件 {fname} 失败: {str(e)}")
+            meta.included = False
+            meta.exclude_reason = f"读取失败: {str(e)}"
+            file_metas.append(meta)
+            continue
+
+        recs = [r for r in recs if not _is_blank_record(r)]
+        meta.record_count = len(recs)
+
+        if date_filter and date_filter.enabled:
+            filtered, exclude_reason = filter_records_by_date(recs, date_filter, meta.date_from_name)
+            if not filtered and exclude_reason:
+                meta.included = False
+                meta.exclude_reason = exclude_reason
+                file_metas.append(meta)
+                continue
+            recs = filtered
+
+        meta.included = True
+        meta.record_count = len(recs)
+        file_metas.append(meta)
+        all_records.extend(recs)
+
+    return all_records, errors, file_metas

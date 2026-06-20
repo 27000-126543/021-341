@@ -1,0 +1,21 @@
+{
+  "project_name": "滨江一号桩基工程",
+  "input_dir": "./records",
+  "output_dir": "./reports",
+  "date_filter": {
+    "enabled": false,
+    "target_date": null,
+    "match_from_filename": true,
+    "match_from_record": true
+  },
+  "check": {
+    "concrete_volume_tolerance": 0.05,
+    "max_pouring_interval_hours": 24.0,
+    "min_hole_depth_margin": 0.0,
+    "expected_pile_count": 120,
+    "pile_prefix": "ZK",
+    "default_pile_diameter": 800,
+    "pile_number_start": 1,
+    "pile_number_end": 120
+  }
+}
